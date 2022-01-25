@@ -3,3 +3,4 @@ flask
 python-dotenv
 PyNaCl
 dnspython
+firebase-admin
