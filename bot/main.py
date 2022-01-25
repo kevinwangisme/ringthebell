@@ -225,7 +225,7 @@ async def show_my_record_as_tutor(ctx, discord_id):
   doc = t_ref.get()
   tutor = doc.to_dict()
   if (tutor == None):
-    dm_msg = f'Did not find verteran record for {discord_id} {discord_name}'
+    dm_msg = f'Did not find veteran record for {discord_id} {discord_name}'
     print(dm_msg)
     await dm.send(dm_msg)
     return
