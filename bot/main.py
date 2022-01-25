@@ -3,9 +3,11 @@ import os
 #import pynacl
 #import dnspython
 import server
+
+
 from discord.ext import commands
+import time
 from datetime import datetime
-import requests
 import json
 import firebase_admin
 from firebase_admin import credentials
@@ -21,18 +23,7 @@ kv_discord_id = '742820006831587438'
 kt_discord_id = '429757950618238987'
 bot_discord_id = '922701449580937268'
 
-#client = discord.Client()
-#client = discord.Client(, intents=intents)
-
-# return current utc-time string
-def get_cur_utctime():
-  dt = datetime.utcnow()
-  #print(dt)
-  cur_utctime_str = str('{:04}'.format(dt.year) + '-' + '{:02}'.format(dt.month) + '-' + '{:02}'.format(dt.day) + '-' + '{:02}'.format(dt.hour) + ':' + '{:02}'.format(dt.minute) + ':' + '{:02}'.format(dt.second) + '.' + '{:06}'.format(dt.microsecond))
-
-  #print(qid)
-  return cur_utctime_str
-  
+ 
 
 
 # Firestore operations
@@ -57,7 +48,7 @@ def DBG_add_a_student(name, school, grade, discord_id, discord_name):
     u'tutor_preferences':'',
     u'profile_info':'',
     u'rank':0,
-    u'total_scores_badages':'',
+    u'total_scores_badges':0,
     u'total_questions':0,
     u'total_sessions':0,
     u'total_session_minutes':0,
@@ -119,22 +110,168 @@ def match_tutors(student_id, subject):
   # matching_tutors here
   matched_tutors = []
   print('match_tutors: student_id=', student_id, ', subject=', subject)
-  t_ref = Tutors_ref.where(u'tutor_subjects', u'array_contains', subject).stream()
+  t_ref = Tutors_ref.where((u'tutor_subjects').lower(), u'array_contains', subject.lower()).stream()
   #t_ref = Tutors_ref.where(u'tutor_subjects', u'array_contains', u'apcs').stream()
   for t in t_ref:
     t_dict = t.to_dict()
-    #print(f'Found record t: {t_dict}')
-    t_discord_status = t_dict['discord_status']
-    t_discord_name = t_dict['discord_name']
-    if (t_discord_status == u'dnd'):
-      print(f'Skip tutor: {t_discord_name}: status={t_discord_status}')
-      continue
     t_subjects = t_dict['tutor_subjects']
     t_discord_id = t_dict['discord_id']
     print(f'Found matching tutor subjects= {t_subjects} discord_id= {t_discord_id}')
     matched_tutors.append(t_discord_id)
   print(matched_tutors)
   return matched_tutors
+
+
+async def dm_matching_questions_for_tutor(ctx, tutor_discord_id):
+  print('====dm_matching_questions_for_tutor: ', tutor_discord_id)
+  tutor_discord_name = ctx.author.name
+  #dm = await ctx.author.create_dm()
+  dm = ctx.channel
+
+  t_ref = Tutors_ref.document(tutor_discord_id)
+  doc = t_ref.get()
+  tutor = doc.to_dict()
+  print(f'{doc.id} => {tutor}')
+
+  new_matches = 0
+  tutor_subjects = tutor['tutor_subjects']
+  q_ref = Questions_ref.where(u'status', u'==', u'new').stream() 
+  for q in q_ref:
+    question = q.to_dict()
+    #print(f'Found question: {question}')
+    q_subject = question['subject']
+    if (q_subject in tutor_subjects):
+      new_matches = new_matches + 1
+      q_id = question['question_id']
+      q_message = question['message']
+      q_secs = question['question_time']
+      q_time = time.asctime(time.localtime(q_secs))
+      student_discord_id = question['student_id']
+      dm_msg = f'Found matching question from {student_discord_id} raised at {q_time}: {q_message}, question_id={q_id}'
+      print(dm_msg)
+      await dm.send(dm_msg)
+
+  print(f'Total new matches = {new_matches}')
+  if (new_matches == 0):
+      dm_msg = f'Have not found unassigned matching questions at present. Try again later.'
+      print(dm_msg)
+      await dm.send(dm_msg)
+  else:
+    update_tutor_total_matches(tutor_discord_name, tutor_discord_id, new_matches)
+
+
+
+async def dm_tutor_rankings(ctx, my_discord_id):
+  print('====dm_tutor_rankings: ', my_discord_id)
+  #dm = await ctx.author.create_dm()
+  dm = ctx.channel
+
+  query = Tutors_ref.order_by(u'total_scores', direction=firestore.Query.DESCENDING).limit(50)
+  docs = query.stream()
+  dm_msg = 'Veteran:\n'
+  dm_msg += 'Rank    score      veteran_discord_id                  veteran_discord_name'
+  print(dm_msg)
+  await dm.send(dm_msg)
+  rank = 0
+  for doc in docs:
+    rank = rank + 1
+    print(f': {doc.id} => {doc.to_dict()}')
+    tutor = doc.to_dict()
+    score = tutor['total_scores']
+    tutor_discord_id = tutor['discord_id']
+    tutor_discord_name = tutor['discord_name']
+    dm_msg = f'{rank}:           {score}          {tutor_discord_id}           {tutor_discord_name}'
+    if (tutor_discord_id == my_discord_id):
+      dm_msg += ' ***'
+    print(dm_msg)
+    await dm.send(dm_msg)
+
+
+
+async def dm_student_rankings(ctx, my_discord_id):
+  print('====dm_student_rankings: ', my_discord_id)
+  #dm = await ctx.author.create_dm()
+  dm = ctx.channel
+
+  query = Students_ref.order_by(u'total_scores_badges', direction=firestore.Query.DESCENDING).limit(50)
+  docs = query.stream()
+  dm_msg = 'Fledgling:\n'
+  dm_msg += 'Rank    score      fledgling_discord_id                fledgling_discord_name'
+  print(dm_msg)
+  await dm.send(dm_msg)
+  rank = 0
+  for doc in docs:
+    rank = rank + 1
+    print(f': {doc.id} => {doc.to_dict()}')
+    student = doc.to_dict()
+    score = student['total_scores_badges']
+    student_discord_id = student['discord_id']
+    student_discord_name = student['discord_name']
+    dm_msg = f'{rank}:           {score}           {student_discord_id}             {student_discord_name}'
+    if (student_discord_id == my_discord_id):
+      dm_msg += ' ***'
+    print(dm_msg)
+    await dm.send(dm_msg)
+
+
+
+async def show_my_record_as_tutor(ctx, discord_id):
+  print('====show_my_record_as_tutor: ', discord_id)
+  discord_name = ctx.author.name
+  #dm = await ctx.author.create_dm()
+  dm = ctx.channel
+
+  t_ref = Tutors_ref.document(discord_id)
+  doc = t_ref.get()
+  tutor = doc.to_dict()
+  if (tutor == None):
+    dm_msg = f'Did not find verteran record for {discord_id} {discord_name}'
+    print(dm_msg)
+    await dm.send(dm_msg)
+    return
+
+  print(f'{doc.id} => {tutor}')
+
+  dm_msg = 'Veteran record for ' + discord_name + ':\n'
+  dm_msg += 'Total_score: ' + str(tutor['total_scores']) + '\n' 
+  dm_msg += 'Total_matches: ' + str(tutor['total_matches']) + '\n' 
+  dm_msg += 'Total_pickups: ' + str(tutor['total_pickups']) + '\n' 
+  await dm.send(dm_msg)
+  dm_msg = ''
+  dm_msg += 'Total_sessions: ' + str(tutor['total_sessions']) + '\n' 
+  dm_msg += 'Total_session_minutes: ' + str(tutor['total_session_minutes']) + '\n' 
+  dm_msg += 'Total_service_minutes: ' + str(tutor['total_service_minutes']) + '\n\n' 
+  await dm.send(dm_msg)
+
+
+async def show_my_record_as_student(ctx, discord_id):
+  print('====show_my_record_as_student: ', discord_id)
+  discord_name = ctx.author.name
+  #dm = await ctx.author.create_dm()
+  dm = ctx.channel
+
+  s_ref = Students_ref.document(discord_id)
+  doc = s_ref.get()
+  student = doc.to_dict()
+  if (student == None):
+    dm_msg = f'Did not find fledgling record for {discord_id} {discord_name}'
+    print(dm_msg)
+    await dm.send(dm_msg)
+    return
+
+  print(f'{doc.id} => {student}')
+
+  total_unanswered_questions = student['total_questions'] - student['total_sessions']
+
+  dm_msg = 'Fledgling record for ' + discord_name + ':\n'
+  dm_msg += 'Total_questions: ' + str(student['total_questions']) + '\n' 
+  dm_msg += 'Total_sessions: ' + str(student['total_sessions']) + '\n' 
+  await dm.send(dm_msg)
+  dm_msg = ''
+  dm_msg += 'Total_session_minutes: ' + str(student['total_session_minutes']) + '\n' 
+  dm_msg += 'Total_unanwsered_questions: ' + str(total_unanswered_questions) + '\n' 
+  dm_msg += 'total_scores_badges: ' + str(student['total_scores_badges']) + '\n\n' 
+  await dm.send(dm_msg)
 
 
 
@@ -157,7 +294,8 @@ def DBG_initialization():
     DBG_add_a_student("fledgling_a", "Sun1", 5, keb_discord_id, "keb#0598")
     DBG_add_a_student("fledgling_b", "Sun2", 8, kt_discord_id, "kaitlynッ#2666")
     tutor_subjects=[]
-    tutor_subjects.append('apcs')
+    tutor_subjects.append('english')
+    tutor_subjects.append('math')
     print(tutor_subjects)
     DBG_add_a_tutor("veteran_x", "Sun3", 10, kv_discord_id, "Kevin Wang#8725", tutor_subjects)
 
@@ -165,42 +303,119 @@ def DBG_initialization():
     show_collection(Questions_ref)
 
   show_collection(Tutors_ref)
-  matched_tutors = match_tutors("test_user_id", "apcs")
+  matched_tutors = match_tutors("test_user_id", "english")
   return matched_tutors
 
 
 
 
-def get_quote():
-  response = requests.get("https://zenquotes.io/api/random")
-  json_data = json.loads(response.text)
-  quote = json_data[0]['q'] + " -" + json_data[0]['a']
-  return quote
+
+def update_tutor(tutor_discord_id, update_s):
+  print('====update_tutor====: ', tutor_discord_id, update_s)
+  t_ref = Tutors_ref.document(tutor_discord_id)
+  t_ref.update(update_s)
+  show_collection(Tutors_ref)
+
+
+def update_tutor_service_minutes(discord_id, service_minutes):
+  print(f'====update_tutor_service_minutes: tutor {discord_id} {service_minutes}')
+  t_ref = Tutors_ref.document(discord_id)
+  doc = t_ref.get()
+  print(f'{doc.id} => {doc.to_dict()}')
+  tutor = doc.to_dict()
+  total_service_minutes = tutor['total_service_minutes']
+  print('total_service_minutes = ', total_service_minutes)
+  discord_name = tutor['discord_name']
+  print('discord_name = ', discord_name)
+  new_total_service_minutes = total_service_minutes + service_minutes
+
+  #print(f'tutor: {discord_name} {discord_id} old total_service_minutes={total_service_minutes}, new total_service_minutes={new_total_service_minutes}')
+  update_s = {
+    u'total_service_minutes':new_total_service_minutes
+  }
+  t_ref.update(update_s)
+  show_collection(Tutors_ref)
+
+
+def update_tutor_total_scores(discord_id, score):
+  print(f'===update_tutor_total_scores: discord_id={discord_id}, score={score}')
+  t_ref = Tutors_ref.document(discord_id)
+  doc = t_ref.get()
+  print(f'{doc.id} => {doc.to_dict()}')
+  tutor = doc.to_dict()
+  total_scores = tutor['total_scores']
+  discord_name = tutor['discord_name']
+  new_total_scores = total_scores + score
+
+  print(f'tutor: {discord_name} {discord_id} old total_scores={score}, new total_scores={new_total_scores}')
+  update_s = {
+    u'total_scores':new_total_scores
+  }
+  t_ref.update(update_s)
+  show_collection(Tutors_ref)
+
+
+def update_tutor_total_pickups(discord_name, discord_id):
+  t_ref = Tutors_ref.document(discord_id)
+  doc = t_ref.get()
+  print(f'{doc.id} => {doc.to_dict()}')
+  tutor = doc.to_dict()
+  total_pickups = tutor['total_pickups']
+  new_total_pickups = total_pickups + 1
+
+  print(f'tutor: {discord_name} {discord_id} old total_pickups={total_pickups}, new total_pickups={new_total_pickups}')
+  update_s = {
+    u'total_pickups':new_total_pickups,
+    u'pickedup_a_question':True
+  }
+  t_ref.update(update_s)
+  show_collection(Tutors_ref)
+
+
+
+
+def update_tutor_total_matches(discord_name, discord_id, new_matches=1):
+  t_ref = Tutors_ref.document(discord_id)
+  doc = t_ref.get()
+  print(f'{doc.id} => {doc.to_dict()}')
+  tutor = doc.to_dict()
+  total_matches = tutor['total_matches']
+  new_total_matches = total_matches + new_matches
+
+  print(f'tutor: {discord_name} {discord_id} old total_matches={total_matches}, new total_matches={new_total_matches}')
+  update_s = {
+    u'total_matches':new_total_matches,
+    u'got_a_match':True
+  }
+  t_ref.update(update_s)
+  show_collection(Tutors_ref)
 
 
 def add_question(question_id, student_id, args):
   print('====add_question====: ', student_id, args)
-  q_timestamp = 0 
+  epoch_secs = time.time()
   subject = ''
   for arg in args:
     if (subject == ''):
       subject = arg
       break
 
-  print('Add question, question_id=', question_id, ', subject=', subject, ', q_timestamp=', q_timestamp)
+  print('Add question, question_id=', question_id, ', subject=', subject, ', q_epoch_secs=', epoch_secs)
   question_s = {
     u'status':u'new',
     u'question_id':question_id,
+    u'v_channel_id':'',
+    u't_channel_id':'',
     u'student_id':student_id,
     u'tutor_id':'',
     u'subject':subject,
     u'extra_info':'',
     u'message':args,
     u'images':'',
-    u'question_time':q_timestamp,
-    u'picked_up_time':'',
-    u'session_start_time':'',
-    u'session_complete_time':'',
+    u'question_time':epoch_secs,
+    u'picked_up_time':0,
+    u'session_start_time':0,
+    u'session_complete_time':0,
     u'session_minutes':0,
     u'service_minutes':0,
     u'score':0,
@@ -217,32 +432,195 @@ def add_question(question_id, student_id, args):
   req_ref.set(question_s)
   show_collection(Questions_ref)
 
- 
+
+def get_question_tutor_and_student_id(question_id):
+  print('====get_question_tutor_and_student_id: ', question_id)
+  q_ref = Questions_ref.document(question_id)
+  doc = q_ref.get()    
+  question = doc.to_dict()
+  if (question == None):
+    return None, None
+
+  student_discord_id = question['student_id']
+  tutor_discord_id = question['tutor_id']
+  print(f'question {question_id}: student={student_discord_id} tutor={tutor_discord_id}')
+  return student_discord_id, tutor_discord_id
+
+
+def update_student_total_questions(discord_id):
+  s_ref = Students_ref.document(discord_id)
+  doc = s_ref.get()
+  print(f'{doc.id} => {doc.to_dict()}')
+  student = doc.to_dict()
+  total_questions = student['total_questions']
+  new_total_questions = total_questions + 1
+  new_total_scores_badges = new_total_questions
+
+  print(f'student: {discord_id} total_questions old={total_questions}, new ={new_total_questions}')
+  update_s = {
+    u'total_questions':new_total_questions,
+    u'total_scores_badges':new_total_scores_badges
+  }
+  s_ref.update(update_s)
+  show_collection(Students_ref)
+
+
+
+def update_student_total_wait_minutes(discord_id, wait_minutes):
+  s_ref = Students_ref.document(discord_id)
+  doc = s_ref.get()
+  print(f'{doc.id} => {doc.to_dict()}')
+  student = doc.to_dict()
+  total_wait_minutes = student['total_wait_minutes']
+  new_total_wait_minutes = total_wait_minutes + wait_minutes
+
+  print(f'student: {discord_id} old total_wait_minutes={wait_minutes}, new total_wait_minutes={new_total_wait_minutes}')
+  update_s = {
+    u'total_wait_minutes':new_total_wait_minutes
+  }
+  s_ref.update(update_s)
+  show_collection(Students_ref)
+
+
+# Update total_sessions, total_session_minutes for the student
+def update_student_total_session_minutes(discord_id, session_minutes):
+    s_ref = Students_ref.document(discord_id)
+    doc = s_ref.get()
+    print(f'{doc.id} => {doc.to_dict()}')
+    student = doc.to_dict()
+    total_sessions = student['total_sessions']
+    discord_name = student['discord_name']
+    total_session_minutes = student['total_session_minutes']
+    new_total_sessions = total_sessions + 1
+    new_total_session_minutes = total_session_minutes + session_minutes
+    print(f'student: {discord_name} {discord_id} new total_sessions={new_total_sessions}, total_session_minutes={new_total_session_minutes}')
+
+    update_s = {
+      u'total_sessions':new_total_sessions,
+      u'total_session_minutes':new_total_session_minutes
+    }
+    Students_ref.document(doc.id).update(update_s)
+    show_collection(Students_ref)
+
 
 def update_question(question_id, update_s):
   print('====update_question====: ', question_id, update_s)
   q_ref = Questions_ref.document(question_id)
-  #req_ref = Questions_ref.where(u'question_id', u'==', question_id)
-  #q_ref.update({
-  #  u'tutor_id': tutor_id,
-  #  u'status': 'picked-up',
-  #  u'picked_up_time':'',
-  #  })
+  doc = q_ref.get()    
+  question = doc.to_dict()
+  if (question == None):
+    return None, None
+
+  v_channel_id = question['v_channel_id']
+  t_channel_id = question['t_channel_id']
+  student_id = question['student_id']
+  tutor_id = question['tutor_id']
+
   q_ref.update(update_s)
   show_collection(Questions_ref)
+  return tutor_id, student_id, v_channel_id, t_channel_id
 
 
-def get_student_id_str_from_question_id(question_id):
-  print('====get_student_id_from_question_id====: ', question_id)
-  q_ref = Questions_ref.document(question_id)
-  #req_ref = Questions_ref.where(u'question_id', u'==', question_id)
-  doc = q_ref.get()
-  print(f'{doc.id} => {doc.to_dict()}')
-  question = doc.to_dict()
-  student_id_str = question['student_id']
-  print('question student_id=', student_id_str)
-  print(f'Found questions with {question_id}, student_id = {student_id_str}')
-  return str(student_id_str)
+
+
+def update_voice_chan_start_questionDB(v_chan_id, member_count):
+  new_status = 'session-start-' + str(member_count)
+  epoch_secs = time.time()
+  update_s = {
+    u'status':new_status,
+    u'session_start_time':epoch_secs,
+  }
+  print(f'====update_voice_chan_start_questionDB, v_chan_id= {v_chan_id}, member_count= {member_count}, update_s={update_s}')
+  q_ref = Questions_ref.where(u'v_channel_id', u'==', v_chan_id)
+  docs = q_ref.get()
+  for doc in docs:
+    print(f'{doc.id} => {doc.to_dict()}')
+    question = doc.to_dict()
+    status = question['status']
+    t_chan_id = question['t_channel_id']
+    print(f'question old status = {status}, v_channel_id={v_chan_id}, t_channel_id={t_chan_id} new status = {new_status}')
+    Questions_ref.document(doc.id).update(update_s)
+    show_collection(Questions_ref)
+
+
+
+
+def update_question_session_complete(v_chan_id):
+  print('====update_question_session_complete: v_channel_id=', v_chan_id)
+  session_complete_time = time.time()
+  q_ref = Questions_ref.where(u'v_channel_id', u'==', v_chan_id)
+  docs = q_ref.get()
+  print('== docs == ', docs)
+  for doc in docs:
+    print(f'{doc.id} => {doc.to_dict()}')
+    question = doc.to_dict()
+    old_status = question['status']
+    tutor_discord_id = question['tutor_id']
+    student_discord_id = question['student_id']
+    old_session_minutes = question['session_minutes']
+    print('=======question old_status =', old_status)
+
+    if (old_status == 'session-start-2'):
+      # a good session with 2 people joined, mark session-complete
+      new_status = 'session-complete'
+      print(f'(complete session) question status: old = {old_status}, new = {new_status}')
+    else: # could be: new picked-up, session-start-1
+      # keep question status unchanged so we know where it was left. (more informational than setting session-incomplete)
+      print(f'(incomplete session) question status: keep old = {old_status}, no update')
+      return tutor_discord_id, student_discord_id, 0
+
+    session_start_time = question['session_start_time']
+    session_minutes = (session_complete_time - session_start_time) / 60.0
+    accumulated_session_minutes = old_session_minutes + session_minutes
+    print(f'session_start_time={time.asctime(time.localtime(session_start_time))}')
+    print(f'session_complete_time={time.asctime(time.localtime(session_complete_time))}')
+    print(f'old_session_minutes={old_session_minutes}, new session_minutes={session_minutes}')
+    print('updating new_status: ', new_status, ' updated session_minutes=', accumulated_session_minutes)
+
+    update_s = {
+      u'status':new_status,
+      u'session_complete_time':session_complete_time,
+      u'session_minutes':accumulated_session_minutes,
+    }
+    Questions_ref.document(doc.id).update(update_s)
+    show_collection(Questions_ref)
+    return tutor_discord_id, student_discord_id, session_minutes
+
+
+def update_tutor_total_session_minutes(discord_id, session_minutes):
+    # Update total_sessions, total_session_minutes for the tutor
+    t_ref = Tutors_ref.document(discord_id)
+    doc = t_ref.get()
+    print(f'{doc.id} => {doc.to_dict()}')
+    tutor = doc.to_dict()
+    total_sessions = tutor['total_sessions']
+    discord_name = tutor['discord_name']
+    total_session_minutes = tutor['total_session_minutes']
+    new_total_sessions = total_sessions + 1
+    new_total_session_minutes = total_session_minutes + session_minutes
+    print(f'tutor: {discord_name} {discord_id} new total_sessions={new_total_sessions}, total_session_minutes={new_total_session_minutes}')
+
+    update_s = {
+      u'total_sessions':new_total_sessions,
+      u'total_session_minutes':new_total_session_minutes
+    }
+    Tutors_ref.document(doc.id).update(update_s)
+    show_collection(Tutors_ref)
+
+
+
+def get_question(question_id):
+  question = Questions_ref.document(question_id).get().to_dict()
+  print('====get_question: question_id=', question_id, 'question=', question)
+  return question
+
+def get_student(student_discord_id):
+  student = Students_ref.document(student_discord_id).get().to_dict()
+  return student
+
+def get_tutor(tutor_discord_id):
+  tutor = Tutors_ref.document(tutor_discord_id).get().to_dict()
+  return tutor
 
 
 
@@ -271,11 +649,11 @@ async def create_private_channel(guild, student_id, tutor_id):
   student_member = await get_member_from_id(bot, student_id)
   if (False):
     invitelink = 'test invite link'
-    print('private channel: student_member:')
+    print('private channel: student_member: ', end='')
     print(student_member.name, student_member.id)
     await student_member.create_dm()
     await student_member.dm_channel.send(invitelink)
-    print('private channel: tutor_member:')
+    print('private channel: tutor_member: ', end='')
     print(tutor_member.name, tutor_member.id)
     await tutor_member.create_dm()
     await tutor_member.dm_channel.send(invitelink)
@@ -295,46 +673,73 @@ async def create_private_channel(guild, student_id, tutor_id):
     print(f'creating category {category_name}')
     category = await guild.create_category(category_name, overwrites=None, reason=None)
 
-  #channel = await guild.create_text_channel(tutor_id, overwrites=overwrites, reason=None, category=category)
-  channel = await guild.create_voice_channel(tutor_id, overwrites=overwrites, reason=None, category=category)
-  print(f'private_channel id= {channel.id}, name={channel.name}')
-  print(f'PC: channel.category={channel.category}')
+  t_chan = await guild.create_text_channel(tutor_id, overwrites=overwrites, reason=None, category=category)
+  t_invitelink = await t_chan.create_invite(max_uses=1,unique=True)
+  print(f'priv_text_channel id= {t_chan.id}, name={t_chan.name}, cat={t_chan.category}, link={t_invitelink}')
 
-  invitelink = await channel.create_invite(max_uses=1,unique=True)
-  print(f'channel: {channel}, category: {category_name}, invitelink={invitelink}')
-  #await ctx.author.send(invitelink)
+  v_chan = await guild.create_voice_channel(tutor_id, overwrites=overwrites, reason=None, category=category)
+  v_invitelink = await v_chan.create_invite(max_uses=1,unique=True)
+  print(f'priv_voice_channel id= {v_chan.id}, name={v_chan.name}, cat={v_chan.category}, link={v_invitelink}')
 
-  print('private channel: student_member:')
-  print(student_member.name, student_member.id)
+  print(f'private channel: student: {student_member.name}, {student_member.id} -- tutor: {tutor_member.name}, {tutor_member.id}')
+
   await student_member.create_dm()
-  await student_member.dm_channel.send(invitelink)
-  print('private channel: tutor_member:')
-  print(tutor_member.name, tutor_member.id)
+  await student_member.dm_channel.send(v_invitelink)
   await tutor_member.create_dm()
-  await tutor_member.dm_channel.send(invitelink)
+  await tutor_member.dm_channel.send(v_invitelink)
+  
+  await student_member.create_dm()
+  await student_member.dm_channel.send(t_invitelink)
+  await tutor_member.create_dm()
+  await tutor_member.dm_channel.send(t_invitelink)
+  
+  return v_chan.id, t_chan.id
+
+
+async def delete_private_channel_by_id(channel_id):
+  private_chan = bot.get_channel(int(channel_id))
+  print('channel_id = ', channel_id, ' private_chan = ', private_chan)
+  if (private_chan == None):
+    return
+
+  member_count = len(private_chan.members)
+  print(f'priv_channel id={private_chan.id} name={private_chan.name} cat={private_chan.category}, created_at: {private_chan.created_at}, member_count={member_count}')
+
+  #if (member_count == 0):
+  if (True):
+    print(f'deleting pivate_channel name {private_chan.name}, id={private_chan.id}')
+    await private_chan.delete()
+
 
 
 
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+TOKEN = os.getenv("DISCORD_TOKEN")
+
+
 @bot.command(name="hello")
 async def hello_world(ctx: commands.Context, *, message):
   #got command hello_world: ctx.author.id= 429757950618238987 keb keb#0598
   await ctx.send(f'got cmd hello from {ctx.author.id} {ctx.author.name} {ctx.author}')
   await ctx.send(f'got message: {message}')
   await ctx.send(f'message.Attachment.size={message.Attachment.size}')
-  #await ctx.send(f'got attachments: {message.attachments}')
-  #await get_member_from_id(ctx.bot, kv_discord_id)
 
 
 @bot.command(
-  name="QUES",
-	help="Ask a question, syntax: <subject> <msg>.",
-	brief="Ask a question."
+  name="RING",
+	help="RING: Ask a question, syntax: <subject> <msg>.",
+	brief="RING: Ask a question."
 )
 async def ask_question(ctx, *args):
-  discord_id = ctx.author.id
-  discord_name = ctx.author
+  student_discord_id = str(ctx.author.id)
+  student_discord_name = ctx.author.name
+
+  db_student_id = get_student(student_discord_id)
+  if (db_student_id is None):
+    await ctx.channel.send('Could not find your record as a fledgling, did you sign up for fledgling form?')
+    return
+
   question_msg = ''
   subject = ''
   for arg in args:
@@ -342,51 +747,71 @@ async def ask_question(ctx, *args):
       subject = arg
     question_msg = question_msg + ' ' + arg
 
-  question_id = get_cur_utctime()
-  await ctx.channel.send(f'Gen question_id: {question_id} for question from {discord_name}: {question_msg}')
-  add_question(question_id, discord_id, args)
+  question_id = student_discord_name + '.' + str(time.time())
+  await ctx.channel.send(f'Got question from {student_discord_name}: {question_msg}, generated question_id = {question_id}')
+  add_question(question_id, student_discord_id, args)
+  update_student_total_questions(student_discord_id)
 
   # return tutor discord_ids
-  matched_tutors = match_tutors(discord_id, subject)
-  print('matched_tutors returned: ', matched_tutors)
-  for tutor_discord_id in matched_tutors:
-    print('tutor_discord_id = ', tutor_discord_id)
+  matched_tutor_ids = match_tutors(student_discord_id, subject)
+  print('matched_tutors returned: ', matched_tutor_ids)
+  for tutor_discord_id in matched_tutor_ids:
+    # status: offline (invisible), online, dnd, idle
+    # skip tutors in offline(invisible) and 'dnd' status (idle is ok)
     member = await get_member_from_id(ctx.bot, tutor_discord_id)
+    discord_status = str(member.status)
+    if (discord_status != "online" and discord_status != "idle"):
+      print(f'skip tutor {member.name} {tutor_discord_id} in status ({discord_status})')
+      continue
+
+    dm_msg = f'Hi {member.name}, You are matched to question {question_msg}, question_id={question_id}'
     await member.create_dm()
-    await member.dm_channel.send(
-      f'Hi {member.name}, You are matched to question_id {question_id}: {question_msg}!'
-    )
+    await member.dm_channel.send(dm_msg)
+
+    update_tutor_total_matches(member.name, tutor_discord_id)
 
 
 
 
 @bot.command(
-  name="ANS",
-	help="Answer the quesion with given question_ID, syntax: ANS <QID>",
-	brief="ANS the question with given question_ID."
+  name="PICKUP",
+	help="Pickup the quesion with given question_ID, syntax: PICKUP <QID>",
+	brief="Pickup the question with given question_ID."
 )
 async def answer_question(ctx, question_id): 
   tutor_discord_id_str = str(ctx.author.id)
-  tutor_discord_name = ctx.author
-  pickup_time = get_cur_utctime()
-  await ctx.channel.send(f'Answering question {question_id} from tutor {tutor_discord_name} {tutor_discord_id_str}')
+  tutor_discord_name = ctx.author.name
+  pickup_time = time.time()
+  await ctx.channel.send(f'Picking up question {question_id} from tutor {tutor_discord_name} {tutor_discord_id_str}')
 
-  update_s = {
-    u'status':u'picked-up',
-    u'tutor_id':tutor_discord_id_str,
-    u'picked_up_time':pickup_time,
-  }
-  update_question(question_id, update_s)
-  ## TODO: transaction
-  student_discord_id_str = get_student_id_str_from_question_id(question_id)
-  
+  question = get_question(question_id)
+  student_discord_id_str = question['student_id']
+  question_time = question['question_time']
+  wait_minutes = (pickup_time - question_time) / 60.0
+
   for guild in bot.guilds:
     print(f'bot.guild={guild}')         #Ring a Bell
     print(f'bot.guild.id={guild.id}')   #922560105650733066
     #student_discord_id = keb_discord_id
     #tutor_id =   kv_discord_id
-    await create_private_channel(guild, student_discord_id_str, tutor_discord_id_str)
+    v_chan_id, t_chan_id = await create_private_channel(guild, student_discord_id_str, tutor_discord_id_str)
     break
+
+  # Update question and Tutor database
+  v_channel_id = str(v_chan_id)
+  t_channel_id = str(t_chan_id)
+  update_s = {
+    u'status':u'picked-up',
+    u'tutor_id':tutor_discord_id_str,
+    u'v_channel_id':v_channel_id,
+    u't_channel_id':t_channel_id,
+    u'picked_up_time':pickup_time,
+  }
+  update_question(question_id, update_s)
+  ## TODO: transaction
+  update_tutor_total_pickups(tutor_discord_name, tutor_discord_id_str)
+  update_student_total_wait_minutes(student_discord_id_str, wait_minutes)
+
 
   
 
@@ -396,12 +821,31 @@ async def answer_question(ctx, question_id):
 	help="Set service minutes for the quesion with given question_ID, syntax: SMINUTES <QID>",
 	brief="Set service minutes for the question with given question_ID."
 )
-async def shour_question(ctx, question_id, service_minutes): 
-  await ctx.channel.send(f'Set service minutes {service_minutes} for question {question_id}')
+async def set_service_minutes(ctx, question_id, service_minutes : int):
+  tutor_discord_id = str(ctx.author.id)
+  tutor_discord_name = ctx.author.name
+
+  await ctx.channel.send(f'Set service minutes {service_minutes} for tutor {tutor_discord_name} question {question_id}')
+  question = get_question(question_id)
+  db_tutor_id = question['tutor_id']
+  if (db_tutor_id != tutor_discord_id):
+    await ctx.channel.send(f'Service minutes can only be set by tutor himself for question {question_id}')
+    return
+
   update_s = {
     u'service_minutes':service_minutes,
   }
   update_question(question_id, update_s)
+
+  update_tutor_service_minutes(tutor_discord_id, service_minutes)
+
+  v_channel_id = question['v_channel_id']
+  t_channel_id = question['t_channel_id']
+  if (v_channel_id != None):
+    await delete_private_channel_by_id(int(v_channel_id))
+  if (t_channel_id != None):
+    await delete_private_channel_by_id(int(t_channel_id))
+
 
 
 
@@ -410,56 +854,81 @@ async def shour_question(ctx, question_id, service_minutes):
 	help="Set score for the quesion with given question_ID, syntax: SCORE <QID>",
 	brief="Set score for the question with given question_ID."
 )
-async def score_question(ctx, question_id, score): 
-  await ctx.channel.send(f'Set score {score} for question {question_id}')
+async def score_question(ctx, question_id, score : int): 
+
+  await ctx.channel.send(f'Set score {score} for the tutor of question {question_id}')
+  if (score < 1 or score > 5):
+    await ctx.channel.send(f'Invalid score {score}: need to be in range [1-5]')
+    return
+
+  question = get_question(question_id)
+  db_student_id = question['student_id']
+  db_tutor_id = question['tutor_id']
+
+  student_discord_id = str(ctx.author.id)
+  if (db_student_id != student_discord_id):
+    await ctx.channel.send(f'Score can only be set by student himself for question {question_id}')
+    return
+
   update_s = {
     u'score':score,
   }
   update_question(question_id, update_s)
+  
+  if (db_tutor_id != None):
+    update_tutor_total_scores(str(db_tutor_id), score)
+
+
+  v_channel_id = question['v_channel_id']
+  t_channel_id = question['t_channel_id']
+  if (v_channel_id != None):
+    await delete_private_channel_by_id(int(v_channel_id))
+  if (t_channel_id != None):
+    await delete_private_channel_by_id(int(t_channel_id))
+
+
+
+
+@bot.command(
+  name="GETQ",
+	help="Get questions that match a tutor's expertise and preferences",
+	brief="Get questions for a tutor"
+)
+async def get_matching_questions(ctx):
+  tutor_discord_id = str(ctx.author.id)
+
+  db_tutor_id = get_tutor(tutor_discord_id)
+  if (db_tutor_id is None):
+    await ctx.channel.send('Could not find your record as a veteran, did you sign up for veteran form?')
+    return
+
+  await dm_matching_questions_for_tutor(ctx, tutor_discord_id)
 
 
 
 @bot.command(
-  name="DBG_SESSION",
-	help="Create a session for the (student, tutor) for the given question_ID, syntax: SESSION <QID>",
-	brief="Create a session for (student,tutor) for the given question_ID."
+  name="SHOWME",
+	help="Show my records",
+	brief="Show my records"
 )
-#async def create_session(ctx, question_id, student_id, tutor_id):
-  #await ctx.channel.send(f'Create private session for student: tutor: question {student_id}:{tutor_id}:{question_id}')
-async def DBG_create_session(ctx, question_id, student_id, tutor_id):
-  print(f'ctx.author.name= {ctx.author.name}, ctx.message.guild={ctx.message.guild}')
-  for guild in bot.guilds:
-    print(f'bot.guild={guild}')         #Ring a Bell
-    print(f'bot.guild.id={guild.id}')   #922560105650733066
-
-    student_id = keb_discord_id
-    tutor_id =   kv_discord_id
-    await create_private_channel(guild, student_id, tutor_id)
-
-  #session_start_time = get_cur_utctime()
-  #update_s = {
-  #  u'status':u'in-session',
-  #  u'session_start_time':session_start_time,
-  #}
-  #update_question(question_id, update_s)
+async def show_my_records(ctx):
+  discord_id = str(ctx.author.id)
+  await show_my_record_as_tutor(ctx, discord_id)
+  await show_my_record_as_student(ctx, discord_id)
 
 
 @bot.command(
-  name="DBG_SEND",
-	help="DBG send cmd",
-	brief="DBG send cmd"
+  name="RANK",
+	help="Show veteran and fledgling rankings",
+	brief="Show veteran and fledgling rankings"
 )
-async def dbg_send_cmd(ctx, *, message):
-    #for member in ctx.guild.members:
-    #  if (member.id != ctx.author.id):
-        #channel = await member.create_dm()
-        #await channel.send(message)
-    #    await member.create_dm()
-    #    await member.channel.send(message)
-    #await ctx.send('Messages successfully sent!')
-    dm = await ctx.author.create_dm()
-    await dm.send('test message')
-   
+async def show_tutor_rankings(ctx):
+  discord_id = str(ctx.author.id)
+  await dm_tutor_rankings(ctx, discord_id)
+  await dm_student_rankings(ctx, discord_id)
+
+
+
 
 @bot.event
 async def on_ready():
@@ -471,25 +940,30 @@ async def on_ready():
       #await guild.text_channels[0].send('test message')
       print(f'bot.guild={guild}')         #Ring a Bell
       print(f'bot.guild.id={guild.id}')   #922560105650733066
-
       student_id = keb_discord_id
       tutor_id =   kv_discord_id
       await create_private_channel(guild, student_id, tutor_id)
 
   #DBG_initialization()
+  #delete_documents_in_collection(Questions_ref, 50)
+  show_collection(Questions_ref)
+
 
 @bot.event
 async def on_member_join(member):
-  print(member.name, member.id, ', on_member_join: welcome to join Ring-a-Bell server!')
+  print(member.name, member.id, ', on_member_join: welcome to join Ring-a-Bell Tutoring Server!')
   await member.create_dm()
   await member.dm_channel.send(
-    f'Hi {member.name}, {member.id}, welcome to join Ring-a-Bell server!'
+    f'Hi {member.name}, {member.id}, welcome to join Ring-a-Bell Tutoring Server!'
   )
+
 
 
 @bot.event
 async def on_member_update(before, after):
-  if (before.name.find('Bot') == -1):
+  return 
+  # unreachable below
+  if (before.name.find('Bot') != -1):
     print('skip Bot on_member_update')
     return
   print('on_member_update before: ', before.name, before.id, before.status, before.roles)
@@ -498,36 +972,45 @@ async def on_member_update(before, after):
   if str(after.status) == "online":
     await after.create_dm()
     await after.dm_channel.send(
-      f'Hi {after.name} ({after.id}), welcome to be online on Ring-a-Bell server!'
+      f'Hi {after.name} ({after.id}), welcome to be online on Ring-a-Bell Tutoring server!'
     )
+
 
 @bot.event 
 async def on_voice_state_update(member, before, after):
-  print('=====Private_Channel: on_voice_state_update: channel.name=tutor_id, channel.id is unique.')
+  #NOTE Private_Channel: on_voice_state_update: channel.name is tutor_id, channel.id is unique.
   oldchan = before.channel
   newchan = after.channel
-  if (oldchan is not None):
-    if (oldchan.category.name == "study_room"):
-      # user (either student or tutor is leaving private channel of study_room.
-      member_count = len(oldchan.members)
-      print(f'{member.name} is leaving')
-      print(f'on_voice_state_update before: id={oldchan.id} name={oldchan.name} cat={oldchan.category}, member_count_after_leaving={member_count}')
-      curutc = get_cur_utctime()
-      print(f'channel created_at_UTC: {oldchan.created_at}, cur_UTC={curutc}')
-      if (member_count == 0):
-        print(f'deleting channel name {oldchan.name}, id={oldchan.id}')
-        await before.channel.delete()
+  if(oldchan is not None):
+    print(f'oldchan id={oldchan.id} name={oldchan.name} cat={oldchan.category}')
+  if(newchan is not None):
+    print(f'newchan id={newchan.id} name={newchan.name} cat={newchan.category}')
 
-  if (newchan is not None):
-    if (newchan.category.name == "study_room"):
+
+  # Start a new tutoring call
+  if (newchan is not None and newchan.category.name == 'study_room'):
       member_count = len(newchan.members)
-      print(f'{member.name} is joining')
-      print(f'on_voice_state_update after: id={newchan.id} name={newchan.name} cat={newchan.category}, member_count_after_joining={len(newchan.members)}')
+      print(f'{datetime.now()}: {member.name} is joining channel ', end='')
+      print(f'id={newchan.id} name={newchan.name} cat={newchan.category}, created_at: {newchan.created_at}, member_count_after_joining={len(newchan.members)}')
+
+      v_channel_id = str(newchan.id)
+      update_voice_chan_start_questionDB(v_channel_id, member_count)
 
 
-  #if before.channel is None and after.channel is not None:
-  #  if before.channel.id == [YOUR_CHANNEL_ID]:
-  #      await member.guild.system_channel.send("Alarm!")
+  # Disconnecting a tutoring call
+  if (oldchan is not None and oldchan.category.name == 'study_room'):
+      # user (either student or tutor) is leaving private channel of study_room.
+      member_count = len(oldchan.members)
+      print(f'{datetime.now()}: {member.name} is leaving channel ', end='')
+      print(f'id={oldchan.id} name={oldchan.name} cat={oldchan.category}, created_at: {oldchan.created_at}, member_count_after_leaving={member_count}')
+
+      # the first person leaving will mark session complete
+      v_channel_id = str(oldchan.id)
+      tutor_discord_id, student_discord_id, session_minutes = update_question_session_complete(v_channel_id)
+      if (session_minutes > 0):
+        update_tutor_total_session_minutes(tutor_discord_id, session_minutes)
+        update_student_total_session_minutes(student_discord_id, session_minutes)
+
 
 
 
@@ -538,11 +1021,6 @@ async def on_message(message):
       await message.channel.send('This is what you want http://youtube.com/fazttech')
       await bot.process_commands(message)
 
-  if message.content.startswith('image'):
-      await message.channel.send(message)
-      await message.channel.send(message.attachments)
-      #await message.channel.send(f'message.Attachment.size={message.Attachment.size}')
-      await message.channel.send(file=discord.File('IMG_2266.JPG'))
 
 print('running bot')
 
