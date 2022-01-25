@@ -270,7 +270,8 @@ async def show_my_record_as_student(ctx, discord_id):
   dm_msg = ''
   dm_msg += 'Total_session_minutes: ' + str(student['total_session_minutes']) + '\n' 
   dm_msg += 'Total_unanwsered_questions: ' + str(total_unanswered_questions) + '\n' 
-  dm_msg += 'total_scores_badges: ' + str(student['total_scores_badges']) + '\n\n' 
+  dm_msg += 'Total_scores_badges: ' + str(student['total_scores_badges']) + '\n' 
+  dm_msg += 'Total_wait_minutes: ' + str(total_wait_minutes) + '\n\n' 
   await dm.send(dm_msg)
 
 
