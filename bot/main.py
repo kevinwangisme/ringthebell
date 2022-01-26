@@ -36,6 +36,13 @@ Tutors_ref = db.collection(u'Tutors')
 Questions_ref = db.collection(u'Questions')
 
 
+def get_quote():
+  response = requests.get("https://zenquotes.io/api/random")
+  json_data = json.loads(response.text)
+  quote = json_data[0]['q'] + " -" + json_data[0]['a']
+  return quote
+
+
 def DBG_add_a_student(name, school, grade, discord_id, discord_name):
   print('Add student, name=', name, ', school=', school, ', grade=', grade, ', discord_id=', discord_id, ', discord_name=', discord_name)
   student_s = {
@@ -270,10 +277,32 @@ async def show_my_record_as_student(ctx, discord_id):
   dm_msg = ''
   dm_msg += 'Total_session_minutes: ' + str(student['total_session_minutes']) + '\n' 
   dm_msg += 'Total_unanwsered_questions: ' + str(total_unanswered_questions) + '\n' 
-  dm_msg += 'Total_scores_badges: ' + str(student['total_scores_badges']) + '\n' 
-  dm_msg += 'Total_wait_minutes: ' + str(total_wait_minutes) + '\n\n' 
+  dm_msg += 'total_scores_badges: ' + str(student['total_scores_badges']) + '\n\n' 
+  dm_msg += 'total_wait_minutes: ' + str(student['total_wait_minutes']) + '\n\n' 
   await dm.send(dm_msg)
 
+
+async def dm_tutor_subjects(ctx):
+  # show all of tutors subjects (unique)
+  dm = ctx.channel
+
+  subject_set = {''}
+  t_ref = Tutors_ref.stream()
+  for t in t_ref:
+    tutor = t.to_dict()
+    tutor_subjects = tutor['tutor_subjects']
+    for one_subject in tutor_subjects:
+      subject_set.add(one_subject)
+
+  print(subject_set)
+  dm_msg = 'All available tutoring subjects:\n'
+  for s in subject_set:
+    if (s != ''):
+      dm_msg += s + '   ';
+
+  print(dm_msg)
+  await dm.send(dm_msg)
+  return
 
 
 def delete_documents_in_collection(collection_ref, batch_size):
@@ -719,18 +748,11 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 
-@bot.command(name="hello")
-async def hello_world(ctx: commands.Context, *, message):
-  #got command hello_world: ctx.author.id= 429757950618238987 keb keb#0598
-  await ctx.send(f'got cmd hello from {ctx.author.id} {ctx.author.name} {ctx.author}')
-  await ctx.send(f'got message: {message}')
-  await ctx.send(f'message.Attachment.size={message.Attachment.size}')
-
 
 @bot.command(
   name="RING",
-	help="RING: Ask a question, syntax: <subject> <msg>.",
-	brief="RING: Ask a question."
+	help="Asks a question: RING <subject> <question message>. A unique question_ID will be generated",
+	brief="Asks a question: RING <subject> <msg>. Will create a question_ID."
 )
 async def ask_question(ctx, *args):
   student_discord_id = str(ctx.author.id)
@@ -776,8 +798,8 @@ async def ask_question(ctx, *args):
 
 @bot.command(
   name="PICKUP",
-	help="Pickup the quesion with given question_ID, syntax: PICKUP <QID>",
-	brief="Pickup the question with given question_ID."
+	help="Pickup a quesion with given question_ID, syntax: PICKUP <Question_ID>",
+	brief="Pickup a question with given question_ID"
 )
 async def answer_question(ctx, question_id): 
   tutor_discord_id_str = str(ctx.author.id)
@@ -819,8 +841,8 @@ async def answer_question(ctx, question_id):
 
 @bot.command(
   name="SMINUTES",
-	help="Set service minutes for the quesion with given question_ID, syntax: SMINUTES <QID>",
-	brief="Set service minutes for the question with given question_ID."
+	help="Sets service minutes for a quesion with given question_ID, syntax: SMINUTES <Question_ID>",
+	brief="Sets service minutes for a question with given question_ID."
 )
 async def set_service_minutes(ctx, question_id, service_minutes : int):
   tutor_discord_id = str(ctx.author.id)
@@ -852,8 +874,8 @@ async def set_service_minutes(ctx, question_id, service_minutes : int):
 
 @bot.command(
   name="SCORE",
-	help="Set score for the quesion with given question_ID, syntax: SCORE <QID>",
-	brief="Set score for the question with given question_ID."
+	help="Sets score for a quesion with given question_ID, syntax: SCORE <question_ID>",
+	brief="Sets score for a question with given question_ID."
 )
 async def score_question(ctx, question_id, score : int): 
 
@@ -892,8 +914,8 @@ async def score_question(ctx, question_id, score : int):
 
 @bot.command(
   name="GETQ",
-	help="Get questions that match a tutor's expertise and preferences",
-	brief="Get questions for a tutor"
+	help="Gets questions that match a tutor's expertise and preferences",
+	brief="Gets matching questions for a tutor"
 )
 async def get_matching_questions(ctx):
   tutor_discord_id = str(ctx.author.id)
@@ -909,8 +931,8 @@ async def get_matching_questions(ctx):
 
 @bot.command(
   name="SHOWME",
-	help="Show my records",
-	brief="Show my records"
+	help="Shows my records: questions, sessions, etc.",
+	brief="Shows my records: questions, sessions, etc."
 )
 async def show_my_records(ctx):
   discord_id = str(ctx.author.id)
@@ -920,14 +942,33 @@ async def show_my_records(ctx):
 
 @bot.command(
   name="RANK",
-	help="Show veteran and fledgling rankings",
-	brief="Show veteran and fledgling rankings"
+	help="Shows veteran and fledgling rankings",
+	brief="Shows veteran and fledgling rankings"
 )
 async def show_tutor_rankings(ctx):
   discord_id = str(ctx.author.id)
   await dm_tutor_rankings(ctx, discord_id)
   await dm_student_rankings(ctx, discord_id)
 
+
+
+@bot.command(
+  name="SUBJECTS",
+	help="Shows all available tutoring subjects currently provided by veterans",
+	brief="Shows all available tutoring subjects"
+)
+async def show_all_tutor_subjects(ctx):
+  await dm_tutor_subjects(ctx)
+
+
+@bot.command(
+  name="INSPIRE",
+	help="Shows a daily inspiration!",
+	brief="Shows a daily inspiration!"
+)
+async def show_daily_inspiration(ctx):
+    quote = get_quote()
+    await ctx.channel.send(quote)
 
 
 
