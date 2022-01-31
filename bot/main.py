@@ -1064,7 +1064,7 @@ async def on_message(message):
       await bot.process_commands(message)
 
 
-print('running bot')
+#print('running bot')
 
-server.server()
-bot.run(TOKEN)
+#server.server()
+#bot.run(TOKEN)
