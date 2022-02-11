@@ -31,7 +31,7 @@ bot_discord_id = '922701449580937268'
 all_tutor_subject_set = {''}
 
 # Firestore operations
-cred = credentials.Certificate('credentials.json')
+cred = credentials.Certificate('bot/credentials.json')
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
