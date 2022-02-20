@@ -1416,11 +1416,11 @@ async def on_member_update(before, after):
   await after.create_dm()
 
   #status: offline (invisible), online, dnd, idle
-  if ((before.status != after.status) and str(after.status) == "online"):
-    await after.dm_channel.send(f'{after.name}: welcome to be online on Ring-a-Bell Tutoring server.')
-    if (await get_tutor(str(after.id)) is not None):
-      await after.dm_channel.send('You may run GETQ command to check new questions!')
-    #await dm_matching_questions_for_tutor(after.dm_channel, after.name, str(after.id))
+  #if ((before.status != after.status) and str(after.status) == "online"):
+    #await after.dm_channel.send(f'{after.name}: welcome to be online on Ring-a-Bell Tutoring server.')
+    #if (await get_tutor(str(after.id)) is not None):
+      #await after.dm_channel.send('You may run GETQ command to check new questions!')
+    ##await dm_matching_questions_for_tutor(after.dm_channel, after.name, str(after.id))
   
   if (str(before) != str(after)):
     msg = (f'Got name change from {str(before)} to {str(after)}, status {before.status}:{after.status}')
